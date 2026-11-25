@@ -103,7 +103,7 @@ test('reads agent frontmatter', () => {
   expect(fm.description).toBe('Finds files')
 })
 
-function stubEngine(on: On, reply: string, prompts: string[] = []) {
+function stubEngine(on: On, reply: string, prompts: string[] = [], extra: string[] = []) {
   on('command.register', () => ({ value: { command: 'refine' } }))
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: '/home/me' }))
@@ -121,7 +121,7 @@ function stubEngine(on: On, reply: string, prompts: string[] = []) {
     ],
   }))
   on('command.list', () => ({
-    value: [{ name: 'simplify', description: 'Clean up', source: 'plugin' }],
+    value: [{ name: 'simplify', description: 'Clean up', source: 'plugin' as const }, ...extra.map(name => ({ name, description: '', source: 'plugin' as const }))],
   }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.close', () => ({ value: undefined }))
@@ -235,4 +235,31 @@ test('two quick presses make one model call', async ($, on) => {
   await band.unmount()
 
   expect(prompts.length).toBe(1)
+})
+
+test('the Refine button carries the stars icon', async ($, on) => {
+  stubEngine(on, 'x')
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  expect(await ui.find({ type: 'Button', text: /\u2728 Refine prompt/ })).toBeDefined()
+  expect(await ui.find({ type: 'Button', text: /Quick Ref/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('with the Quick Ref mod installed its button sits in the same row and runs /quickref', async ($, on) => {
+  const ran: string[] = []
+  stubEngine(on, 'x', [], ['quickref'])
+  on('command.run', (_, e) => {
+    ran.push(e.command)
+
+    return { text: '' }
+  })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+
+  const outer = (await ui.find({ type: 'Box' })) as { children?: { type?: string }[] }
+  expect(outer.children?.filter(c => c.type === 'Box').length).toBe(2)
+  await ui.press({ key: 'quickref' })
+
+  expect(ran).toEqual(['quickref'])
+  await ui.unmount()
 })

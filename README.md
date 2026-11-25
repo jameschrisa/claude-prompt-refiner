@@ -15,6 +15,8 @@ Each press is exactly one Sonnet call on the session's bill. No other network ac
 
 Test: `claude plugin test .`
 
+With the quick-ref mod installed, its lightning **q: Quick Ref** button appears in the same row and runs `/quickref`.
+
 ## Install
 
 At the prompt of a Claude Code terminal session:

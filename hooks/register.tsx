@@ -216,6 +216,12 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const running = await read($, isRunning)
     const problem = await read($, error)
+    // Two bands from two plugins stack as separate rows, so when the Quick Ref mod is
+    // installed this row draws its button too, and Quick Ref draws none of its own.
+    const hasQuickRef = await $.command
+      .list()
+      .then(list => list.some(c => c.name === 'quickref'))
+      .catch(() => false)
 
     if (running) {
       return (
@@ -228,8 +234,19 @@ export const register: Register = on => {
     return (
       <Box>
         <Box borderStyle="round" borderColor="cyan" paddingX={1}>
-          <Button key="refine" label="Refine prompt" hotkey="r" plain onPress={() => start($)} />
+          <Button key="refine" label={'\u2728 Refine prompt'} hotkey="r" plain onPress={() => start($)} />
         </Box>
+        {hasQuickRef && (
+          <Box borderStyle="round" borderColor="cyan" paddingX={1} marginLeft={1}>
+            <Button
+              key="quickref"
+              label={'\u03DF Quick Ref'}
+              hotkey="q"
+              plain
+              onPress={() => $.command.run({ command: 'quickref' })}
+            />
+          </Box>
+        )}
         {problem !== '' && <Text color="red"> {problem} </Text>}
         {problem === NOT_JSON && (
           <Button key="retry" label="Try again" hotkey="t" onPress={async () => start($, await read($, draft))} />
