@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
 
-import { EMPTY_DRAFT, NOT_JSON, frontmatter, parseAnalysis } from './logic'
+import { EMPTY_DRAFT, NOT_JSON, answeredPairs, frontmatter, parseAnalysis } from './logic'
 
 const GOOD = {
   score: 6,
@@ -70,6 +70,7 @@ test('clamps and defaults a sloppy reply', () => {
       questions: Array.from({ length: 9 }, (_, i) => ({ question: `q${i}` })),
       agents: Array.from({ length: 9 }, (_, i) => ({ name: `a${i}` })),
       execution: { mode: 'bogus' },
+      refined: 'x',
     }),
   )
   expect(r?.score).toBe(10)
@@ -77,6 +78,22 @@ test('clamps and defaults a sloppy reply', () => {
   expect(r?.questions[0]?.id).toBe('q1')
   expect(r?.agents.length).toBe(5)
   expect(r?.execution.mode).toBe('single')
+})
+
+test('a reply with no refined prompt counts as no JSON', () => {
+  expect(parseAnalysis('{"score":5}')).toBeNull()
+  expect(parseAnalysis(JSON.stringify({ ...GOOD, refined: '  ' }))).toBeNull()
+})
+
+test('only answered questions are sent, with their text', () => {
+  const pairs = answeredPairs(
+    [
+      { id: 'q1', question: 'Which browser?' },
+      { id: 'q2', question: 'Which env?' },
+    ],
+    { q1: ' Firefox ', q2: '  ' },
+  )
+  expect(pairs).toEqual([{ question: 'Which browser?', answer: 'Firefox' }])
 })
 
 test('reads agent frontmatter', () => {
@@ -185,4 +202,37 @@ test('one press is one model call, with the catalog in it', async ($, on) => {
   await ui.press({ key: 'use' })
   expect(filled).toEqual([GOOD.refined])
   await ui.unmount()
+})
+
+test('fold in sends the question text and clears the answers', async ($, on) => {
+  const prompts: string[] = []
+  stubEngine(on, JSON.stringify(GOOD), prompts)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await band.press({ key: 'refine' })
+  await band.unmount()
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.input({ key: 'answer-q1', text: 'Firefox' })
+  await ui.press({ key: 'fold' })
+
+  expect(prompts.length).toBe(2)
+  expect(prompts[1]).toContain('Which browser?')
+  expect(prompts[1]).toContain('Firefox')
+  expect(prompts[0]).not.toContain('Firefox')
+  expect(await ui.find({ type: 'Button', text: /Fold in answers/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('two quick presses make one model call', async ($, on) => {
+  const prompts: string[] = []
+  stubEngine(on, JSON.stringify(GOOD), prompts)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const band = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  await Promise.all([band.press({ key: 'refine' }), band.press({ key: 'refine' })])
+  await band.unmount()
+
+  expect(prompts.length).toBe(1)
 })

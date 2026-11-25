@@ -32,6 +32,9 @@ export function parseAnalysis(raw: string): Analysis | null {
     return null
   }
 
+  const refined = text(data.refined)
+  if (refined.trim() === '') return null
+
   const score = Number(data.score)
   const execution = rec(data.execution)
   const pairs = (v: unknown) =>
@@ -68,7 +71,7 @@ export function parseAnalysis(raw: string): Analysis | null {
     skills: pairs(data.skills),
     tools: pairs(data.tools),
     connectors: pairs(data.connectors),
-    refined: text(data.refined),
+    refined,
   }
 }
 
@@ -97,25 +100,39 @@ export const SYSTEM = [
   '- refined keeps the intent of the draft and adds the missing details as clearly marked assumptions (for example "Assumption: ..."). Never invent facts as if the person had stated them.',
 ].join('\n')
 
+export type Answered = { question: string; answer: string }
+
+/** The questions of the current analysis that the person has answered. */
+export function answeredPairs(
+  questions: { id: string; question: string }[],
+  answers: Record<string, string>,
+): Answered[] {
+  return questions
+    .map(q => ({ question: q.question, answer: (answers[q.id] ?? '').trim() }))
+    .filter(x => x.answer !== '')
+}
+
+/** The catalog block comes first and is cached; the draft and answers follow. */
 export function buildPrompt(
   draft: string,
   catalog: Catalog,
-  answers?: Record<string, string>,
-): string {
+  answered: Answered[] = [],
+): { text: string; cache?: true }[] {
   const agents = catalog.agents
     .map(a => `- ${a.name}${a.model ? ` (model: ${a.model})` : ''}${a.description ? `: ${a.description.slice(0, 160)}` : ''}`)
     .join('\n')
   const skills = catalog.skills
     .map(s => `- ${s.name}${s.description ? `: ${s.description.slice(0, 120)}` : ''}`)
     .join('\n')
-  const filled = Object.entries(answers ?? {}).filter(([, v]) => v.trim() !== '')
-  const answered = filled.length
-    ? `\n\nThe person has answered some questions. Fold the answers into "refined" as facts and drop the questions they settle:\n${filled.map(([k, v]) => `${k}: ${v}`).join('\n')}`
+  const folded = answered.length
+    ? `\n\nThe person answered these questions. Fold each answer into "refined" as a fact and drop the questions they settle:\n${answered.map(x => `Q: ${x.question}\nA: ${x.answer}`).join('\n')}`
     : ''
 
   return [
-    `DRAFT PROMPT:\n${draft}`,
-    `ROUTING RULES:\n${catalog.routing || '(none given)'}`,
-    `CATALOG\nAgent types:\n${agents || '(none)'}\n\nSkills and slash commands:\n${skills || '(none)'}\n\nTools:\n${catalog.tools.join(', ') || '(none)'}\n\nConnected MCP servers:\n${catalog.connectors.join(', ') || '(none)'}`,
-  ].join('\n\n') + answered
+    {
+      text: `ROUTING RULES:\n${catalog.routing || '(none given)'}\n\nCATALOG\nAgent types:\n${agents || '(none)'}\n\nSkills and slash commands:\n${skills || '(none)'}\n\nTools:\n${catalog.tools.join(', ') || '(none)'}\n\nConnected MCP servers:\n${catalog.connectors.join(', ') || '(none)'}`,
+      cache: true,
+    },
+    { text: `DRAFT PROMPT:\n${draft}${folded}` },
+  ]
 }

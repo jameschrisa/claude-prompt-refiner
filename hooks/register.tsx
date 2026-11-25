@@ -1,12 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Analysis, Phase } from '../types'
+import type { Analysis } from '../types'
 import {
   EMPTY_DRAFT,
   MODEL,
   NOT_JSON,
   SYSTEM,
+  answeredPairs,
   buildPrompt,
   frontmatter,
   parseAnalysis,
@@ -15,7 +16,10 @@ import type { Catalog } from './logic'
 
 const PANE = 'prompt-refiner'
 
-const phase = atom({ plugin: 'prompt-refiner', key: 'phase' } as const, 'idle' as Phase)
+const isRunning = atom({ plugin: 'prompt-refiner', key: 'isRunning' } as const, false)
+
+// Held from the first line of a press, so a quick second press cannot start a second call.
+let isBusy = false
 const error = atom({ plugin: 'prompt-refiner', key: 'error' } as const, '')
 const draft = atom({ plugin: 'prompt-refiner', key: 'draft' } as const, '')
 const analysis = atom(
@@ -67,7 +71,17 @@ async function buildCatalog($: EngineInterface): Promise<Catalog> {
     const installed = JSON.parse(
       await $.fs.read(`${home}/.claude/plugins/installed_plugins.json`),
     ) as { plugins?: Record<string, { installPath?: string }[]> }
+    let enabled: Record<string, boolean> = {}
+    try {
+      enabled =
+        (JSON.parse(await $.fs.read(`${home}/.claude/settings.json`)) as {
+          enabledPlugins?: Record<string, boolean>
+        }).enabledPlugins ?? {}
+    } catch {
+      // no settings file: every installed plugin counts
+    }
     for (const [key, installs] of Object.entries(installed.plugins ?? {})) {
+      if (enabled[key] === false) continue
       const pluginName = key.split('@')[0] ?? key
       const path = installs?.[0]?.installPath
       if (path) agents.push(...(await agentsIn($, `${path}/agents`, pluginName)))
@@ -109,14 +123,15 @@ async function buildCatalog($: EngineInterface): Promise<Catalog> {
 }
 
 // One press, one Sonnet call. `useAnswers` folds the person's answers in.
-async function analyze($: EngineInterface, text: string, useAnswers: boolean) {
-  await update($, phase, () => 'running' as Phase)
+async function refine($: EngineInterface, text: string, useAnswers: boolean) {
+  await update($, isRunning, () => true)
   await update($, error, () => '')
   await update($, draft, () => text)
 
   try {
     const catalog = await buildCatalog($)
-    const given = useAnswers ? await read($, answers) : undefined
+    const current = await read($, analysis)
+    const given = useAnswers && current ? answeredPairs(current.questions, await read($, answers)) : []
     const result = await $.model.complete({
       model: MODEL,
       system: SYSTEM,
@@ -127,51 +142,54 @@ async function analyze($: EngineInterface, text: string, useAnswers: boolean) {
 
     if (!result.isAnswered) {
       await update($, error, () => `The model call failed (${result.reason}).`)
-      await update($, phase, () => 'failed' as Phase)
       return
     }
 
     const parsed = parseAnalysis(result.text)
     if (parsed === null) {
       await update($, error, () => NOT_JSON)
-      await update($, phase, () => 'failed' as Phase)
       return
     }
 
     await update($, analysis, () => parsed)
-    if (!useAnswers) await update($, answers, () => ({}))
-    await update($, phase, () => 'ready' as Phase)
+    await update($, answers, () => ({}))
     const opened = await $.ui.open({ id: PANE, title: 'Prompt refiner', focus: true })
     if (!opened.isPlaced) {
       $.ui.toast('No room for the pane. Widen the terminal or run /refine.')
     }
   } catch (err) {
     await update($, error, () => `Refine failed: ${String(err)}`)
-    await update($, phase, () => 'failed' as Phase)
+  } finally {
+    await update($, isRunning, () => false)
   }
 }
 
-async function start($: EngineInterface) {
-  if ((await read($, phase)) === 'running') return
-  const { text } = await $.prompt.read()
-  if (text.trim() === '') {
-    await update($, error, () => EMPTY_DRAFT)
-    await update($, phase, () => 'failed' as Phase)
-    return
+// Re-run and Fold in start here: the stored draft, with or without the answers.
+async function rerun($: EngineInterface, useAnswers: boolean) {
+  if (isBusy) return
+  isBusy = true
+  try {
+    await refine($, await read($, draft), useAnswers)
+  } finally {
+    isBusy = false
   }
-  await analyze($, text, false)
 }
 
-async function retry($: EngineInterface) {
-  if ((await read($, phase)) === 'running') return
-  const stored = await read($, draft)
-  const { text } = await $.prompt.read()
-  const use = text.trim() !== '' ? text : stored
-  if (use.trim() === '') {
-    await update($, error, () => EMPTY_DRAFT)
-    return
+// The Refine button, and Try again (which falls back to the stored draft).
+async function start($: EngineInterface, fallback = '') {
+  if (isBusy) return
+  isBusy = true
+  try {
+    const { text } = await $.prompt.read()
+    const use = text.trim() !== '' ? text : fallback
+    if (use.trim() === '') {
+      await update($, error, () => EMPTY_DRAFT)
+      return
+    }
+    await refine($, use, false)
+  } finally {
+    isBusy = false
   }
-  await analyze($, use, false)
 }
 
 export const register: Register = on => {
@@ -196,10 +214,10 @@ export const register: Register = on => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
-    const now = await read($, phase)
+    const running = await read($, isRunning)
     const problem = await read($, error)
 
-    if (now === 'running') {
+    if (running) {
       return (
         <Box>
           <Text dimColor>Refining your prompt with Sonnet...</Text>
@@ -214,7 +232,7 @@ export const register: Register = on => {
         </Box>
         {problem !== '' && <Text color="red"> {problem} </Text>}
         {problem === NOT_JSON && (
-          <Button key="retry" label="Try again" hotkey="t" onPress={() => retry($)} />
+          <Button key="retry" label="Try again" hotkey="t" onPress={async () => start($, await read($, draft))} />
         )}
         {problem !== '' && (
           <Button
@@ -231,7 +249,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Input, Text } = $.ui.resolve(e)
-    const now = await read($, phase)
+    const running = await read($, isRunning)
     const problem = await read($, error)
     const result = await read($, analysis)
     const given = await read($, answers)
@@ -239,7 +257,7 @@ export const register: Register = on => {
     if (result === null) {
       return (
         <Box flexDirection="column">
-          <Text dimColor>{now === 'running' ? 'Working...' : 'No analysis yet.'}</Text>
+          <Text dimColor>{running ? 'Working...' : 'No analysis yet.'}</Text>
           <Button key="close" label="Close" hotkey="c" onPress={() => $.ui.close({ id: PANE })} />
         </Box>
       )
@@ -263,7 +281,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         {problem !== '' && <Text color="red">{problem}</Text>}
-        {now === 'running' && <Text dimColor>Working...</Text>}
+        {running && <Text dimColor>Working...</Text>}
         <Text bold>Clarity {result.score}/10</Text>
         <Text>{result.summary}</Text>
 
@@ -323,14 +341,14 @@ export const register: Register = on => {
               key="fold"
               label="Fold in answers"
               hotkey="f"
-              onPress={async () => analyze($, await read($, draft), true)}
+              onPress={() => rerun($, true)}
             />
           )}
           <Button
             key="rerun"
             label="Re-run"
             hotkey="a"
-            onPress={async () => analyze($, await read($, draft), false)}
+            onPress={() => rerun($, false)}
           />
           <Button key="close" label="Close" hotkey="c" onPress={() => $.ui.close({ id: PANE })} />
         </Box>

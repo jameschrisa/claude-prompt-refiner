@@ -1,5 +1,3 @@
-export type Phase = 'idle' | 'running' | 'ready' | 'failed'
-
 export type Question = { id: string; question: string; why: string }
 export type Choice = { name: string; why: string }
 export type AgentPick = { name: string; model: string; why: string }
@@ -20,7 +18,7 @@ export type Analysis = {
 declare module 'claude-code' {
   interface PluginState {
     'prompt-refiner': {
-      phase: Phase
+      isRunning: boolean
       error: string
       draft: string
       analysis: Shaped<Analysis | null>
