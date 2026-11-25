@@ -1,0 +1,11 @@
+{
+  "name": "prompt-refiner",
+  "version": "0.1.0",
+  "description": "A band above the prompt box that checks your draft against what this session has (agents, models, skills, tools, connectors) and offers a refined prompt.",
+  "types": "./types/index.d.ts",
+  "license": "MIT",
+  "author": {
+    "name": "James"
+  },
+  "repository": "https://github.com/jameschrisa/claude-prompt-refiner"
+}

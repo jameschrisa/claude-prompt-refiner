@@ -1,0 +1,5 @@
+{
+  "name": "prompt-refiner",
+  "owner": { "name": "James" },
+  "plugins": [{ "name": "prompt-refiner", "source": "./" }]
+}
