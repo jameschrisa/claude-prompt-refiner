@@ -240,7 +240,7 @@ export const register: Register = on => {
           <Box borderStyle="round" borderColor="cyan" paddingX={1} marginLeft={1}>
             <Button
               key="quickref"
-              label={'\u03DF Quick Ref'}
+              label={'\u26A1 Quick Ref'}
               hotkey="q"
               plain
               onPress={() => $.command.run({ command: 'quickref' })}
